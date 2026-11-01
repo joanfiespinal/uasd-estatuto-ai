@@ -1,7 +1,15 @@
 
+require("dotenv").config();
+
 async function generarRespuesta(pregunta, fragmentos) {
     if (!fragmentos || fragmentos.length === 0) {
         return "No encontré información suficiente en el Estatuto Orgánico para responder esa pregunta.";
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+        throw new Error("Falta configurar la variable GEMINI_API_KEY.");
     }
 
     const contexto = fragmentos
@@ -24,6 +32,7 @@ REGLAS:
 - No inventes información, fechas ni artículos.
 - Menciona el artículo que respalda la respuesta.
 - Si el contexto no contiene la respuesta, indícalo claramente.
+- Si la información es insuficiente, no intentes completar la respuesta con conocimientos externos.
 
 CONTEXTO:
 ${contexto}
@@ -34,39 +43,56 @@ ${pregunta}
 RESPUESTA:
 `;
 
+    const modelo = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
+
     const respuesta = await fetch(
-        "http://127.0.0.1:11434/api/generate",
+        `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent`,
         {
             method: "POST",
             headers: {
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "x-goog-api-key": apiKey
             },
             body: JSON.stringify({
-                model: "qwen2.5:1.5b",
-                prompt,
-                stream: false,
-                keep_alive: "30m",
-                options: {
+                contents: [
+                    {
+                        role: "user",
+                        parts: [
+                            {
+                                text: prompt
+                            }
+                        ]
+                    }
+                ],
+                generationConfig: {
                     temperature: 0,
-                    num_predict: 120,
-                    num_ctx: 2048,
-                    top_p: 0.8
+                    maxOutputTokens: 300,
+                    topP: 0.8
                 }
             })
         }
     );
 
-    if (!respuesta.ok) {
-        throw new Error("No se pudo conectar con Ollama.");
-    }
-
     const datos = await respuesta.json();
 
-    if (!datos.response || !datos.response.trim()) {
-        throw new Error("La inteligencia artificial no generó una respuesta.");
+    if (!respuesta.ok) {
+        console.error("Error de Gemini:", datos);
+
+        throw new Error(
+            datos.error?.message || "No se pudo conectar con Gemini."
+        );
     }
 
-    return datos.response.trim();
+    const texto = datos.candidates?.[0]?.content?.parts
+        ?.map((parte) => parte.text || "")
+        .join("")
+        .trim();
+
+    if (!texto) {
+        throw new Error("Gemini no generó una respuesta.");
+    }
+
+    return texto;
 }
 
 module.exports = {
